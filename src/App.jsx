@@ -1,536 +1,718 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
 import { 
-  Search, Plus, Edit2, Trash2, History, 
-  LogOut, Star, Scissors, Calendar, MapPin, Phone, User, X
+  getAuth, 
+  signInAnonymously, 
+  signInWithCustomToken, 
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  doc, 
+  deleteDoc, 
+  arrayUnion, 
+  serverTimestamp 
+} from 'firebase/firestore';
+import { 
+  Scissors, 
+  UserPlus, 
+  Search, 
+  Award, 
+  History, 
+  PlusCircle, 
+  Trash2, 
+  Phone, 
+  Calendar, 
+  Star, 
+  Gift, 
+  CheckCircle2, 
+  Sparkles,
+  Users,
+  DollarSign,
+  Info
 } from 'lucide-react';
 
-// --- MOCK DATA (Dados Iniciais para Teste) ---
-const initialCustomers = [
-  { id: '1', name: 'Mariana Costa', dob: '1990-05-15', regDate: '2023-10-01', address: 'Rua das Flores, 123', phone: '(11) 98765-4321' },
-  { id: '2', name: 'Sofia Viana', dob: '1985-11-22', regDate: '2023-11-15', address: 'Av. Paulista, 1000, Apto 45', phone: '(11) 91234-5678' },
-  { id: '3', name: 'Helena Albuquerque', dob: '1992-03-08', regDate: '2024-01-20', address: 'Rua Augusta, 500', phone: '(11) 99988-7766' },
-];
+// -----------------------------------------------------------------------------
+// Configuração do Firebase & Inicialização
+// -----------------------------------------------------------------------------
+const firebaseConfig = typeof __firebase_config !== 'undefined' 
+  ? JSON.parse(__firebase_config) 
+  : {
+      apiKey: "demo-api-key",
+      authDomain: "demo-app.firebaseapp.com",
+      projectId: "demo-app",
+      storageBucket: "demo-app.appspot.com",
+      messagingSenderId: "123456789",
+      appId: "1:123456789:web:demo"
+    };
 
-const initialServices = [
-  { id: '101', customerId: '1', date: '2023-10-01', description: 'Corte e Escova', points: 3 },
-  { id: '102', customerId: '1', date: '2023-12-10', description: 'Colorimetria (Mechas)', points: 3 },
-  { id: '103', customerId: '2', date: '2023-11-15', description: 'Tratamento Reconstrutor', points: 3 },
-];
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'leo-hair-stylist';
 
 export default function App() {
-  // --- STATES ---
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [customers, setCustomers] = useState(initialCustomers);
-  const [services, setServices] = useState(initialServices);
+  // -----------------------------------------------------------------------------
+  // Estados Globais e Autenticação
+  // -----------------------------------------------------------------------------
+  const [user, setUser] = useState(null);
+  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [clients, setClients] = useState([]);
+  const [loadingData, setLoadingData] = useState(true);
+  
+  // Estados de Interface
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedClient, setSelectedClient] = useState(null);
+  const [isAddClientModalOpen, setIsAddClientModalOpen] = useState(false);
+  const [isAddServiceModalOpen, setIsAddServiceModalOpen] = useState(false);
   
-  // Modal States
-  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
-  const [editingCustomer, setEditingCustomer] = useState(null); // null = Novo Cadastro
-  
-  const [historyModalCustomer, setHistoryModalCustomer] = useState(null);
-  
-  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  // Formulários
+  const [newClient, setNewClient] = useState({ name: '', phone: '', birthday: '', notes: '' });
+  const [newService, setNewService] = useState({ serviceName: 'Corte Masculino', price: 40, points: 10, notes: '' });
 
-  // --- DERIVED DATA ---
-  const filteredCustomers = useMemo(() => {
-    return customers.filter(c => 
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-      c.phone.includes(searchTerm)
-    );
-  }, [customers, searchTerm]);
-
-  const getCustomerPoints = (customerId) => {
-    return services.filter(s => s.customerId === customerId).reduce((total, s) => total + s.points, 0);
-  };
-
-  // --- HANDLERS ---
-  const handleLogin = (e) => {
-    e.preventDefault();
-    // Simulação de login
-    setIsAuthenticated(true);
-  };
-
-  const handleLogout = () => {
-    setIsAuthenticated(false);
-  };
-
-  const openNewCustomerModal = () => {
-    setEditingCustomer(null);
-    setIsCustomerModalOpen(true);
-  };
-
-  const openEditCustomerModal = (customer) => {
-    setEditingCustomer(customer);
-    setIsCustomerModalOpen(true);
-  };
-
-  const saveCustomer = (customerData) => {
-    if (editingCustomer) {
-      setCustomers(customers.map(c => c.id === editingCustomer.id ? { ...customerData, id: editingCustomer.id } : c));
-    } else {
-      setCustomers([...customers, { ...customerData, id: Date.now().toString() }]);
-    }
-    setIsCustomerModalOpen(false);
-  };
-
-  const deleteCustomer = () => {
-    setCustomers(customers.filter(c => c.id !== deleteConfirmId));
-    setServices(services.filter(s => s.customerId !== deleteConfirmId)); // Apaga serviços vinculados
-    setDeleteConfirmId(null);
-  };
-
-  const addService = (customerId, description, date) => {
-    const newService = {
-      id: Date.now().toString(),
-      customerId,
-      description,
-      date,
-      points: 3 // Regra de negócio: 3 pontos por serviço
+  // -----------------------------------------------------------------------------
+  // 1. Efeito de Autenticação Automática
+  // -----------------------------------------------------------------------------
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Erro na autenticação Firebase:", err);
+      }
     };
-    setServices([newService, ...services]);
+    
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setLoadingAuth(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // -----------------------------------------------------------------------------
+  // 2. Efeito de Leitura dos Clientes do Firestore em Tempo Real
+  // -----------------------------------------------------------------------------
+  useEffect(() => {
+    if (!user) return;
+
+    setLoadingData(true);
+    // Coleção pública conforme Regra 1
+    const clientsRef = collection(db, 'artifacts', appId, 'public', 'data', 'clients');
+
+    const unsubscribe = onSnapshot(
+      clientsRef,
+      (snapshot) => {
+        const clientList = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        
+        // Ordena por nome na memória JS (Regra 2: Sem queries complexas no Firestore)
+        clientList.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        
+        setClients(clientList);
+        
+        // Atualiza a seleção atual se houver cliente selecionado
+        if (selectedClient) {
+          const updatedSelected = clientList.find(c => c.id === selectedClient.id);
+          if (updatedSelected) {
+            setSelectedClient(updatedSelected);
+          }
+        }
+        
+        setLoadingData(false);
+      },
+      (error) => {
+        console.error("Erro ao escutar clientes no Firestore:", error);
+        setLoadingData(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // -----------------------------------------------------------------------------
+  // Ações do Banco de Dados (Firestore)
+  // -----------------------------------------------------------------------------
+  
+  // Adicionar Novo Cliente / Amigo
+  const handleAddClient = async (e) => {
+    e.preventDefault();
+    if (!newClient.name.trim() || !user) return;
+
+    try {
+      const clientsRef = collection(db, 'artifacts', appId, 'public', 'data', 'clients');
+      await addDoc(clientsRef, {
+        name: newClient.name,
+        phone: newClient.phone || '',
+        birthday: newClient.birthday || '',
+        notes: newClient.notes || '',
+        points: 0,
+        history: [],
+        createdAt: serverTimestamp()
+      });
+
+      setNewClient({ name: '', phone: '', birthday: '', notes: '' });
+      setIsAddClientModalOpen(false);
+    } catch (error) {
+      console.error("Erro ao salvar cliente:", error);
+    }
   };
 
-  // --- RENDERIZADORES CONDICIONAIS ---
-  if (!isAuthenticated) {
-    return <LoginScreen onLogin={handleLogin} />;
-  }
+  // Registrar Novo Serviço / Acumular Pontos
+  const handleAddService = async (e) => {
+    e.preventDefault();
+    if (!selectedClient || !user) return;
+
+    try {
+      const clientRef = doc(db, 'artifacts', appId, 'public', 'data', 'clients', selectedClient.id);
+      
+      const serviceEntry = {
+        id: Date.now().toString(),
+        serviceName: newService.serviceName,
+        price: Number(newService.price) || 0,
+        pointsEarned: Number(newService.points) || 0,
+        date: new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        notes: newService.notes
+      };
+
+      const newTotalPoints = (selectedClient.points || 0) + Number(newService.points);
+
+      await updateDoc(clientRef, {
+        points: newTotalPoints,
+        history: arrayUnion(serviceEntry)
+      });
+
+      setIsAddServiceModalOpen(false);
+      setNewService({ serviceName: 'Corte Masculino', price: 40, points: 10, notes: '' });
+    } catch (error) {
+      console.error("Erro ao registrar serviço:", error);
+    }
+  };
+
+  // Resgatar Recompensa de Fidelidade (Ex: Trocar 100 Pontos por Corte Grátis)
+  const handleRedeemReward = async (pointsCost, rewardName) => {
+    if (!selectedClient || (selectedClient.points || 0) < pointsCost || !user) return;
+
+    try {
+      const clientRef = doc(db, 'artifacts', appId, 'public', 'data', 'clients', selectedClient.id);
+      
+      const redemptionEntry = {
+        id: Date.now().toString(),
+        serviceName: `🎁 Resgate: ${rewardName}`,
+        price: 0,
+        pointsEarned: -pointsCost,
+        date: new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+        notes: 'Recompensa de Fidelidade Resgatada!'
+      };
+
+      await updateDoc(clientRef, {
+        points: selectedClient.points - pointsCost,
+        history: arrayUnion(redemptionEntry)
+      });
+    } catch (error) {
+      console.error("Erro ao resgatar pontos:", error);
+    }
+  };
+
+  // Excluir Cliente
+  const handleDeleteClient = async (clientId) => {
+    if (!user) return;
+    try {
+      const clientRef = doc(db, 'artifacts', appId, 'public', 'data', 'clients', clientId);
+      await deleteDoc(clientRef);
+      if (selectedClient?.id === clientId) {
+        setSelectedClient(null);
+      }
+    } catch (error) {
+      console.error("Erro ao remover cliente:", error);
+    }
+  };
+
+  // Filtragem de clientes por busca
+  const filteredClients = clients.filter(client => 
+    client.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (client.phone && client.phone.includes(searchTerm))
+  );
 
   return (
-    <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900">
-      {/* HEADER */}
-      <header className="bg-zinc-950 text-white shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Scissors className="w-6 h-6 text-amber-500" />
-            <h1 className="text-xl font-light tracking-widest uppercase" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-              Leo <span className="font-semibold">Hair Stylist</span>
-            </h1>
+    <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans flex flex-col">
+      {/* -----------------------------------------------------------------------------
+          Header / Barra Superior
+         ----------------------------------------------------------------------------- */}
+      <header className="bg-neutral-900 border-b border-amber-500/20 sticky top-0 z-20 shadow-lg">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="bg-gradient-to-tr from-amber-600 to-amber-400 p-2.5 rounded-xl text-neutral-950 shadow-md shadow-amber-500/10">
+              <Scissors className="h-7 w-7 stroke-[2.5]" />
+            </div>
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+                Leo Hair Stylist
+                <span className="text-xs bg-amber-500/10 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full font-normal">
+                  VIP Club
+                </span>
+              </h1>
+              <p className="text-xs text-neutral-400">Sistema de Gestão & Fidelidade Nuvem</p>
+            </div>
           </div>
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-zinc-400 hidden sm:inline-block">Painel Administrativo</span>
-            <button onClick={handleLogout} className="text-zinc-400 hover:text-white transition-colors flex items-center gap-2">
-              <LogOut className="w-5 h-5" />
-              <span className="text-sm">Sair</span>
-            </button>
-          </div>
+
+          <button
+            onClick={() => setIsAddClientModalOpen(true)}
+            className="flex items-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-neutral-950 font-semibold px-4 py-2.5 rounded-xl transition duration-200 shadow-md shadow-amber-500/20 active:scale-95"
+          >
+            <UserPlus className="w-5 h-5" />
+            <span className="hidden sm:inline">Cadastrar Amigo</span>
+          </button>
         </div>
       </header>
 
-      {/* MAIN CONTENT */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      {/* -----------------------------------------------------------------------------
+          Conteúdo Principal
+         ----------------------------------------------------------------------------- */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* TOP BAR: Title & Actions */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <h2 className="text-2xl font-semibold text-zinc-800">Clientes Cadastrados</h2>
+        {/* COLUNA DA ESQUERDA: Busca e Lista de Clientes (5 colunas no Desktop) */}
+        <section className="lg:col-span-5 flex flex-col gap-4">
           
-          <div className="flex flex-col sm:flex-row gap-4 w-full sm:w-auto">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 w-5 h-5" />
-              <input 
-                type="text" 
-                placeholder="Buscar por nome ou telefone..." 
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full sm:w-72 pl-10 pr-4 py-2 border border-zinc-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:border-transparent"
-              />
+          {/* Card Estatísticas Rápidas */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-neutral-900/80 border border-neutral-800 p-4 rounded-2xl flex items-center gap-3">
+              <div className="p-3 bg-amber-500/10 text-amber-400 rounded-xl">
+                <Users className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-xs text-neutral-400">Amigos/Clientes</p>
+                <p className="text-xl font-bold text-white">{clients.length}</p>
+              </div>
             </div>
-            <button 
-              onClick={openNewCustomerModal}
-              className="bg-zinc-900 hover:bg-zinc-800 text-white px-4 py-2 rounded-md flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
-            >
-              <Plus className="w-5 h-5" />
-              Novo Cliente
-            </button>
+            <div className="bg-neutral-900/80 border border-neutral-800 p-4 rounded-2xl flex items-center gap-3">
+              <div className="p-3 bg-amber-500/10 text-amber-400 rounded-xl">
+                <Award className="w-6 h-6" />
+              </div>
+              <div>
+                <p className="text-xs text-neutral-400">Total de Pontos</p>
+                <p className="text-xl font-bold text-white">
+                  {clients.reduce((acc, c) => acc + (c.points || 0), 0)}
+                </p>
+              </div>
+            </div>
           </div>
-        </div>
 
-        {/* TABLE */}
-        <div className="bg-white rounded-lg shadow-sm border border-zinc-200 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-zinc-100 border-b border-zinc-200 text-sm font-semibold text-zinc-600 uppercase tracking-wider">
-                  <th className="px-6 py-4">Nome</th>
-                  <th className="px-6 py-4">Telefone</th>
-                  <th className="px-6 py-4">Data Nasc.</th>
-                  <th className="px-6 py-4">Pontos</th>
-                  <th className="px-6 py-4 text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-200">
-                {filteredCustomers.length === 0 ? (
-                  <tr>
-                    <td colSpan="5" className="px-6 py-8 text-center text-zinc-500">
-                      Nenhum cliente encontrado.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredCustomers.map(customer => {
-                    const points = getCustomerPoints(customer.id);
-                    return (
-                      <tr key={customer.id} className="hover:bg-zinc-50 transition-colors">
-                        <td className="px-6 py-4 font-medium text-zinc-900 flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-zinc-200 flex items-center justify-center text-zinc-600 font-bold">
-                            {customer.name.charAt(0)}
+          {/* Campo de Busca */}
+          <div className="relative">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-400" />
+            <input
+              type="text"
+              placeholder="Buscar amigo por nome ou telefone..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-neutral-900 border border-neutral-800 focus:border-amber-500 text-white rounded-xl pl-11 pr-4 py-3 outline-none transition duration-200 placeholder:text-neutral-500"
+            />
+          </div>
+
+          {/* Lista de Clientes */}
+          <div className="bg-neutral-900/50 border border-neutral-800/80 rounded-2xl p-4 flex-1 flex flex-col min-h-[400px]">
+            <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider mb-3 px-1">
+              Clientes Cadastrados ({filteredClients.length})
+            </h2>
+
+            {loadingData ? (
+              <div className="flex-1 flex items-center justify-center text-neutral-500">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-500"></div>
+              </div>
+            ) : filteredClients.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-neutral-500">
+                <Users className="w-12 h-12 mb-2 stroke-[1.5] text-neutral-600" />
+                <p className="text-sm">Nenhum amigo encontrado.</p>
+                <p className="text-xs mt-1 text-neutral-600">Clique em "Cadastrar Amigo" para salvar o primeiro!</p>
+              </div>
+            ) : (
+              <div className="space-y-2 overflow-y-auto max-h-[600px] pr-1 custom-scrollbar">
+                {filteredClients.map((client) => {
+                  const isSelected = selectedClient?.id === client.id;
+                  return (
+                    <div
+                      key={client.id}
+                      onClick={() => setSelectedClient(client)}
+                      className={`p-4 rounded-xl border transition cursor-pointer flex items-center justify-between ${
+                        isSelected
+                          ? 'bg-neutral-800 border-amber-500/50 shadow-md shadow-amber-500/5'
+                          : 'bg-neutral-900/90 border-neutral-800/70 hover:border-neutral-700 hover:bg-neutral-800/50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
+                          isSelected ? 'bg-amber-500 text-neutral-950' : 'bg-neutral-800 text-amber-400 border border-neutral-700'
+                        }`}>
+                          {client.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <h3 className="font-semibold text-white text-base leading-snug">{client.name}</h3>
+                          <div className="flex items-center gap-3 text-xs text-neutral-400 mt-0.5">
+                            {client.phone && (
+                              <span className="flex items-center gap-1">
+                                <Phone className="w-3 h-3" />
+                                {client.phone}
+                              </span>
+                            )}
                           </div>
-                          {customer.name}
-                        </td>
-                        <td className="px-6 py-4 text-zinc-600">{customer.phone}</td>
-                        <td className="px-6 py-4 text-zinc-600">{formatDateBR(customer.dob)}</td>
-                        <td className="px-6 py-4">
-                          <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 px-2.5 py-0.5 rounded-full text-xs font-semibold">
-                            <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
-                            {points} pts
+                        </div>
+                      </div>
+
+                      <div className="text-right">
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-400 bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/20">
+                          <Star className="w-3.5 h-3.5 fill-amber-400" />
+                          {client.points || 0} pts
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* COLUNA DA DIREITA: Detalhes do Cliente Selecionado & Cartão de Fidelidade (7 colunas no Desktop) */}
+        <section className="lg:col-span-7">
+          {selectedClient ? (
+            <div className="space-y-6">
+              
+              {/* Header do Cliente Selecionado */}
+              <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 relative overflow-hidden shadow-xl">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full blur-2xl pointer-events-none"></div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-800 pb-5">
+                  <div className="flex items-center gap-4">
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 to-amber-300 text-neutral-950 font-extrabold text-2xl flex items-center justify-center shadow-lg shadow-amber-500/20">
+                      {selectedClient.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-bold text-white">{selectedClient.name}</h2>
+                      <div className="flex flex-wrap items-center gap-4 text-xs text-neutral-400 mt-1">
+                        {selectedClient.phone && (
+                          <span className="flex items-center gap-1">
+                            <Phone className="w-3.5 h-3.5 text-amber-500" />
+                            {selectedClient.phone}
                           </span>
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <div className="flex justify-end gap-2">
-                            <button 
-                              onClick={() => setHistoryModalCustomer(customer)}
-                              title="Histórico de Serviços"
-                              className="p-2 text-zinc-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
-                            >
-                              <History className="w-5 h-5" />
-                            </button>
-                            <button 
-                              onClick={() => openEditCustomerModal(customer)}
-                              title="Editar"
-                              className="p-2 text-zinc-400 hover:text-amber-600 hover:bg-amber-50 rounded-md transition-colors"
-                            >
-                              <Edit2 className="w-5 h-5" />
-                            </button>
-                            <button 
-                              onClick={() => setDeleteConfirmId(customer.id)}
-                              title="Excluir"
-                              className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
-                            >
-                              <Trash2 className="w-5 h-5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
+                        )}
+                        {selectedClient.birthday && (
+                          <span className="flex items-center gap-1">
+                            <Calendar className="w-3.5 h-3.5 text-amber-500" />
+                            {selectedClient.birthday}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setIsAddServiceModalOpen(true)}
+                      className="flex items-center gap-2 bg-amber-500 hover:bg-amber-400 text-neutral-950 font-semibold px-4 py-2 rounded-xl text-sm transition shadow-md shadow-amber-500/10"
+                    >
+                      <PlusCircle className="w-4 h-4" />
+                      Novo Corte / Serviço
+                    </button>
+                    <button
+                      onClick={() => handleDeleteClient(selectedClient.id)}
+                      title="Excluir Amigo"
+                      className="p-2 text-neutral-500 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Observações */}
+                {selectedClient.notes && (
+                  <div className="mt-4 bg-neutral-950/60 p-3 rounded-xl border border-neutral-800 text-xs text-neutral-300 flex items-start gap-2">
+                    <Info className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                    <p><span className="font-semibold text-neutral-400">Obs:</span> {selectedClient.notes}</p>
+                  </div>
                 )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </main>
+              </div>
 
-      {/* MODALS */}
-      {isCustomerModalOpen && (
-        <CustomerFormModal 
-          customer={editingCustomer} 
-          onClose={() => setIsCustomerModalOpen(false)} 
-          onSave={saveCustomer}
-        />
-      )}
+              {/* Cartão de Fidelidade Digital */}
+              <div className="bg-gradient-to-br from-neutral-900 via-neutral-900 to-amber-950/40 border border-amber-500/30 rounded-2xl p-6 relative shadow-xl">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-amber-400" />
+                    <h3 className="font-bold text-white text-lg">Cartão Fidelidade VIP</h3>
+                  </div>
+                  <span className="text-amber-400 font-bold text-xl flex items-center gap-1 bg-amber-500/10 px-3 py-1 rounded-full border border-amber-500/20">
+                    <Star className="w-5 h-5 fill-amber-400" />
+                    {selectedClient.points || 0} PTS
+                  </span>
+                </div>
 
-      {historyModalCustomer && (
-        <ServiceHistoryModal 
-          customer={historyModalCustomer}
-          services={services.filter(s => s.customerId === historyModalCustomer.id)}
-          totalPoints={getCustomerPoints(historyModalCustomer.id)}
-          onClose={() => setHistoryModalCustomer(null)}
-          onAddService={addService}
-        />
-      )}
+                <p className="text-xs text-neutral-400 mb-6">
+                  Acumule pontos a cada visita no Leo Hair Stylist e troque por cortes e prêmios exclusivos!
+                </p>
 
-      {deleteConfirmId && (
-        <DeleteConfirmModal 
-          onCancel={() => setDeleteConfirmId(null)}
-          onConfirm={deleteCustomer}
-        />
-      )}
-    </div>
-  );
-}
+                {/* Opções de Resgate */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="bg-neutral-950/80 border border-neutral-800 p-3.5 rounded-xl flex items-center justify-between">
+                    <div>
+                      <p className="font-semibold text-white text-sm">Corte Grátis</p>
+                      <p className="text-xs text-amber-400 font-medium">100 Pontos</p>
+                    </div>
+                    <button
+                      onClick={() => handleRedeemReward(100, 'Corte Grátis')}
+                      disabled={(selectedClient.points || 0) < 100}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                        (selectedClient.points || 0) >= 100
+                          ? 'bg-amber-500 hover:bg-amber-400 text-neutral-950 cursor-pointer'
+                          : 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
+                      }`}
+                    >
+                      Resgatar
+                    </button>
+                  </div>
 
-// --- SUB-COMPONENTS (Telas e Modais) ---
+                  <div className="bg-neutral-950/80 border border-neutral-800 p-3.5 rounded-xl flex items-center justify-between">
+                    <div>
+                      <p className="font-semibold text-white text-sm">Barba ou Hidratação</p>
+                      <p className="text-xs text-amber-400 font-medium">60 Pontos</p>
+                    </div>
+                    <button
+                      onClick={() => handleRedeemReward(60, 'Barba ou Hidratação')}
+                      disabled={(selectedClient.points || 0) < 60}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                        (selectedClient.points || 0) >= 60
+                          ? 'bg-amber-500 hover:bg-amber-400 text-neutral-950 cursor-pointer'
+                          : 'bg-neutral-800 text-neutral-600 cursor-not-allowed'
+                      }`}
+                    >
+                      Resgatar
+                    </button>
+                  </div>
+                </div>
+              </div>
 
-function LoginScreen({ onLogin }) {
-  return (
-    <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center p-4">
-      <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl p-8 relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-zinc-700 via-zinc-400 to-zinc-700"></div>
-        
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-light text-white tracking-[0.15em] uppercase" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-            Leo<br/>
-            <span className="text-xl tracking-widest text-zinc-400">Hair Stylist</span>
-          </h1>
-          <p className="text-zinc-500 mt-2 text-sm">Acesso ao Sistema Administrativo</p>
-        </div>
+              {/* Histórico de Serviços */}
+              <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 shadow-xl">
+                <div className="flex items-center gap-2 mb-4 border-b border-neutral-800 pb-3">
+                  <History className="w-5 h-5 text-amber-500" />
+                  <h3 className="font-bold text-white text-lg">Histórico de Atendimentos</h3>
+                </div>
 
-        <form onSubmit={onLogin} className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-zinc-400 mb-1">E-mail</label>
-            <input 
-              type="email" 
-              required
-              defaultValue="admin@leohair.com"
-              className="w-full px-4 py-3 bg-zinc-950 border border-zinc-800 rounded-md text-white focus:outline-none focus:border-zinc-500 transition-colors"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-zinc-400 mb-1">Senha</label>
-            <input 
-              type="password" 
-              required
-              defaultValue="admin123"
-              className="w-full px-4 py-3 bg-zinc-950 border border-zinc-800 rounded-md text-white focus:outline-none focus:border-zinc-500 transition-colors"
-            />
-          </div>
-          <button 
-            type="submit" 
-            className="w-full py-3 bg-zinc-100 hover:bg-white text-zinc-950 font-medium uppercase tracking-wider text-sm rounded-md transition-colors"
-          >
-            Entrar
-          </button>
-        </form>
-      </div>
-    </div>
-  );
-}
+                {!selectedClient.history || selectedClient.history.length === 0 ? (
+                  <div className="text-center py-8 text-neutral-500 text-sm">
+                    Nenhum serviço registrado para este amigo ainda.
+                  </div>
+                ) : (
+                  <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
+                    {[...selectedClient.history].reverse().map((item) => (
+                      <div
+                        key={item.id}
+                        className="bg-neutral-950/60 border border-neutral-800/80 p-3.5 rounded-xl flex items-center justify-between"
+                      >
+                        <div>
+                          <p className="font-semibold text-white text-sm">{item.serviceName}</p>
+                          <p className="text-xs text-neutral-400 mt-0.5">{item.date}</p>
+                          {item.notes && <p className="text-xs text-neutral-500 italic mt-1">{item.notes}</p>}
+                        </div>
 
-function CustomerFormModal({ customer, onClose, onSave }) {
-  // Inicializa o formulário com dados do cliente (se for edição) ou vazio (se for novo)
-  const today = new Date().toISOString().split('T')[0];
-  const [formData, setFormData] = useState({
-    name: customer?.name || '',
-    dob: customer?.dob || '',
-    regDate: customer?.regDate || today,
-    address: customer?.address || '',
-    phone: customer?.phone || ''
-  });
+                        <div className="text-right">
+                          <p className="font-bold text-white text-sm">
+                            {item.price > 0 ? `R$ ${item.price.toFixed(2)}` : 'GRÁTIS'}
+                          </p>
+                          <span className={`text-xs font-semibold flex items-center justify-end gap-1 ${
+                            item.pointsEarned >= 0 ? 'text-amber-400' : 'text-emerald-400'
+                          }`}>
+                            {item.pointsEarned >= 0 ? `+${item.pointsEarned} pts` : `${item.pointsEarned} pts`}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSave(formData);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-        <div className="flex justify-between items-center p-6 border-b border-zinc-100">
-          <h3 className="text-xl font-semibold text-zinc-800 flex items-center gap-2">
-            {customer ? <Edit2 className="w-5 h-5" /> : <User className="w-5 h-5" />}
-            {customer ? 'Editar Cliente' : 'Novo Cliente'}
-          </h3>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600">
-            <X className="w-6 h-6" />
-          </button>
-        </div>
-        
-        <form onSubmit={handleSubmit} className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-zinc-700 mb-1">Nome Completo *</label>
-              <input 
-                type="text" required
-                value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-900"
-              />
             </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-zinc-700 mb-1">Telefone / WhatsApp *</label>
-              <input 
-                type="text" required placeholder="(00) 00000-0000"
-                value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-900"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-zinc-700 mb-1">Data de Nascimento</label>
-              <input 
-                type="date"
-                value={formData.dob} onChange={e => setFormData({...formData, dob: e.target.value})}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-900"
-              />
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-zinc-700 mb-1">Endereço Completo</label>
-              <input 
-                type="text"
-                value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-900"
-              />
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-zinc-700 mb-1">Data de Cadastro</label>
-              <input 
-                type="date" required
-                value={formData.regDate} onChange={e => setFormData({...formData, regDate: e.target.value})}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-900"
-              />
-            </div>
-          </div>
-
-          <div className="mt-8 flex justify-end gap-3">
-            <button type="button" onClick={onClose} className="px-4 py-2 border border-zinc-300 text-zinc-700 rounded-md hover:bg-zinc-50">
-              Cancelar
-            </button>
-            <button type="submit" className="px-4 py-2 bg-zinc-900 text-white rounded-md hover:bg-zinc-800">
-              Salvar Cliente
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function ServiceHistoryModal({ customer, services, totalPoints, onClose, onAddService }) {
-  const [isAdding, setIsAdding] = useState(false);
-  const [newDesc, setNewDesc] = useState('');
-  const [newDate, setNewDate] = useState(new Date().toISOString().split('T')[0]);
-
-  const handleAdd = (e) => {
-    e.preventDefault();
-    if(newDesc.trim() === '') return;
-    onAddService(customer.id, newDesc, newDate);
-    setNewDesc('');
-    setIsAdding(false);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-      <div className="bg-zinc-50 rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden animate-in slide-in-from-bottom-4 duration-300">
-        
-        {/* Modal Header */}
-        <div className="bg-zinc-950 text-white p-6 flex justify-between items-start">
-          <div>
-            <h3 className="text-2xl font-light mb-1" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-              Perfil de {customer.name}
-            </h3>
-            <div className="flex gap-4 text-sm text-zinc-400 mt-2">
-              <span className="flex items-center gap-1"><Phone className="w-4 h-4"/> {customer.phone}</span>
-              <span className="flex items-center gap-1"><Calendar className="w-4 h-4"/> Cliente desde {formatDateBR(customer.regDate)}</span>
-            </div>
-          </div>
-          <button onClick={onClose} className="text-zinc-400 hover:text-white">
-            <X className="w-6 h-6" />
-          </button>
-        </div>
-
-        {/* Dashboard de Pontos */}
-        <div className="bg-white border-b border-zinc-200 p-6 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 bg-amber-100 rounded-full flex items-center justify-center">
-              <Star className="w-8 h-8 text-amber-500 fill-amber-500" />
-            </div>
-            <div>
-              <p className="text-sm text-zinc-500 uppercase tracking-wider font-semibold">Pontos Acumulados</p>
-              <p className="text-3xl font-bold text-zinc-900">{totalPoints}</p>
-            </div>
-          </div>
-          <button 
-            onClick={() => setIsAdding(!isAdding)}
-            className="bg-zinc-900 hover:bg-zinc-800 text-white px-4 py-2 rounded-md flex items-center gap-2 transition-colors"
-          >
-            {isAdding ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-            {isAdding ? 'Cancelar' : 'Adicionar Serviço'}
-          </button>
-        </div>
-
-        {/* Formulário Novo Serviço */}
-        {isAdding && (
-          <form onSubmit={handleAdd} className="bg-zinc-100 p-6 border-b border-zinc-200 flex gap-4 items-end">
-            <div className="flex-1">
-              <label className="block text-sm font-medium text-zinc-700 mb-1">Descrição do Serviço</label>
-              <input 
-                type="text" required placeholder="Ex: Corte, Coloração, Penteado..."
-                value={newDesc} onChange={e => setNewDesc(e.target.value)}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-900"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-zinc-700 mb-1">Data</label>
-              <input 
-                type="date" required
-                value={newDate} onChange={e => setNewDate(e.target.value)}
-                className="w-full px-3 py-2 border border-zinc-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-900"
-              />
-            </div>
-            <button type="submit" className="px-6 py-2 bg-amber-500 hover:bg-amber-600 text-white font-medium rounded-md transition-colors">
-              Salvar (+3 pts)
-            </button>
-          </form>
-        )}
-
-        {/* Tabela de Histórico */}
-        <div className="overflow-y-auto p-6 flex-1 bg-zinc-50">
-          <h4 className="font-semibold text-zinc-800 mb-4 flex items-center gap-2">
-            <History className="w-5 h-5 text-zinc-500"/> Histórico de Serviços
-          </h4>
-          
-          {services.length === 0 ? (
-            <p className="text-zinc-500 text-center py-8 bg-white rounded-lg border border-dashed border-zinc-300">
-              Nenhum serviço registrado para este cliente ainda.
-            </p>
           ) : (
-            <div className="bg-white rounded-lg border border-zinc-200 overflow-hidden">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-zinc-50 border-b border-zinc-200">
-                  <tr>
-                    <th className="px-4 py-3 font-medium text-zinc-600">Data</th>
-                    <th className="px-4 py-3 font-medium text-zinc-600">Serviço Realizado</th>
-                    <th className="px-4 py-3 font-medium text-zinc-600 text-right">Pontos Gerados</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-100">
-                  {services.sort((a,b) => new Date(b.date) - new Date(a.date)).map(service => (
-                    <tr key={service.id} className="hover:bg-zinc-50">
-                      <td className="px-4 py-3 text-zinc-600">{formatDateBR(service.date)}</td>
-                      <td className="px-4 py-3 font-medium text-zinc-900">{service.description}</td>
-                      <td className="px-4 py-3 text-right">
-                        <span className="text-amber-600 font-semibold">+{service.points}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            /* Estado quando nenhum cliente está selecionado */
+            <div className="bg-neutral-900/50 border border-neutral-800 rounded-2xl p-12 text-center flex flex-col items-center justify-center min-h-[400px]">
+              <div className="w-16 h-16 bg-neutral-800 rounded-full flex items-center justify-center text-amber-500 mb-4">
+                <Scissors className="w-8 h-8" />
+              </div>
+              <h3 className="text-lg font-bold text-white">Selecione um Amigo</h3>
+              <p className="text-sm text-neutral-400 max-w-sm mt-1">
+                Escolha um cliente da lista à esquerda para ver os pontos acumulados, resgatar recompensas ou registrar um novo corte.
+              </p>
             </div>
           )}
+        </section>
+      </main>
+
+      {/* -----------------------------------------------------------------------------
+          MODAL 1: Cadastrar Novo Cliente
+         ----------------------------------------------------------------------------- */}
+      {isAddClientModalOpen && (
+        <div className="fixed inset-0 bg-neutral-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-neutral-900 border border-neutral-800 w-full max-w-md rounded-2xl p-6 shadow-2xl relative">
+            <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+              <UserPlus className="w-5 h-5 text-amber-500" />
+              Cadastrar Novo Amigo
+            </h3>
+
+            <form onSubmit={handleAddClient} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-neutral-400 mb-1">Nome Completo *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: Carlos Silva"
+                  value={newClient.name}
+                  onChange={(e) => setNewClient({ ...newClient, name: e.target.value })}
+                  className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white rounded-xl px-4 py-2.5 outline-none text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-neutral-400 mb-1">Telefone / WhatsApp</label>
+                <input
+                  type="text"
+                  placeholder="Ex: (11) 99999-9999"
+                  value={newClient.phone}
+                  onChange={(e) => setNewClient({ ...newClient, phone: e.target.value })}
+                  className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white rounded-xl px-4 py-2.5 outline-none text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-neutral-400 mb-1">Data de Aniversário</label>
+                <input
+                  type="text"
+                  placeholder="Ex: 15/10"
+                  value={newClient.birthday}
+                  onChange={(e) => setNewClient({ ...newClient, birthday: e.target.value })}
+                  className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white rounded-xl px-4 py-2.5 outline-none text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-neutral-400 mb-1">Observações (Preferências de Corte)</label>
+                <textarea
+                  rows="2"
+                  placeholder="Ex: Gosta de degradê navalhado, café sem açúcar..."
+                  value={newClient.notes}
+                  onChange={(e) => setNewClient({ ...newClient, notes: e.target.value })}
+                  className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white rounded-xl px-4 py-2.5 outline-none text-sm resize-none"
+                ></textarea>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddClientModalOpen(false)}
+                  className="px-4 py-2 text-sm font-medium text-neutral-400 hover:text-white transition"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="bg-amber-500 hover:bg-amber-400 text-neutral-950 font-semibold px-5 py-2 rounded-xl text-sm transition shadow-md shadow-amber-500/10"
+                >
+                  Salvar Cliente
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* -----------------------------------------------------------------------------
+          MODAL 2: Registrar Novo Corte / Atendimento
+         ----------------------------------------------------------------------------- */}
+      {isAddServiceModalOpen && selectedClient && (
+        <div className="fixed inset-0 bg-neutral-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-neutral-900 border border-neutral-800 w-full max-w-md rounded-2xl p-6 shadow-2xl relative">
+            <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+              <Scissors className="w-5 h-5 text-amber-500" />
+              Novo Serviço para {selectedClient.name}
+            </h3>
+
+            <form onSubmit={handleAddService} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-neutral-400 mb-1">Serviço Realizado</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: Corte + Barba"
+                  value={newService.serviceName}
+                  onChange={(e) => setNewService({ ...newService, serviceName: e.target.value })}
+                  className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white rounded-xl px-4 py-2.5 outline-none text-sm"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-neutral-400 mb-1">Valor (R$)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={newService.price}
+                    onChange={(e) => setNewService({ ...newService, price: e.target.value })}
+                    className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white rounded-xl px-4 py-2.5 outline-none text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-neutral-400 mb-1">Pontos Fidelidade</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={newService.points}
+                    onChange={(e) => setNewService({ ...newService, points: e.target.value })}
+                    className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white rounded-xl px-4 py-2.5 outline-none text-sm"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-neutral-400 mb-1">Observações do Atendimento</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Usou pomada fosca"
+                  value={newService.notes}
+                  onChange={(e) => setNewService({ ...newService, notes: e.target.value })}
+                  className="w-full bg-neutral-950 border border-neutral-800 focus:border-amber-500 text-white rounded-xl px-4 py-2.5 outline-none text-sm"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddServiceModalOpen(false)}
+                  className="px-4 py-2 text-sm font-medium text-neutral-400 hover:text-white transition"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="bg-amber-500 hover:bg-amber-400 text-neutral-950 font-semibold px-5 py-2 rounded-xl text-sm transition shadow-md shadow-amber-500/10"
+                >
+                  Confirmar Serviço
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
-}
-
-function DeleteConfirmModal({ onCancel, onConfirm }) {
-  return (
-    <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-2xl max-w-sm w-full p-6 text-center animate-in zoom-in-95 duration-200">
-        <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Trash2 className="w-6 h-6" />
-        </div>
-        <h3 className="text-lg font-semibold text-zinc-900 mb-2">Excluir Cliente?</h3>
-        <p className="text-zinc-500 text-sm mb-6">
-          Tem certeza que deseja excluir este cliente? O histórico de serviços e os pontos acumulados também serão apagados. Esta ação não pode ser desfeita.
-        </p>
-        <div className="flex gap-3 justify-center">
-          <button onClick={onCancel} className="px-4 py-2 border border-zinc-300 text-zinc-700 rounded-md hover:bg-zinc-50 w-full">
-            Cancelar
-          </button>
-          <button onClick={onConfirm} className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 w-full">
-            Sim, excluir
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// --- UTILITÁRIOS ---
-function formatDateBR(dateString) {
-  if (!dateString) return '-';
-  const [year, month, day] = dateString.split('-');
-  return `${day}/${month}/${year}`;
 }
