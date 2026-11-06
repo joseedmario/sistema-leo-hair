@@ -32,7 +32,6 @@ import {
   FileText
 } from 'lucide-react';
 
-// Chaves reais do seu projeto no Firebase
 const firebaseConfig = {
   apiKey: "AIzaSyCyxBCU3RQfLx7mp82mqeH3HBmFp6YWgIQ",
   authDomain: "leo-hair-stylist.firebaseapp.com",
@@ -56,14 +55,12 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   
-  // Novo Cliente
   const [newName, setNewName] = useState('');
   const [newPhone, setNewPhone] = useState('');
   const [newBirthDate, setNewBirthDate] = useState('');
   const [newAddress, setNewAddress] = useState('');
   const [newNotes, setNewNotes] = useState('');
 
-  // Edição de Cliente
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
@@ -71,7 +68,6 @@ export default function App() {
   const [editAddress, setEditAddress] = useState('');
   const [editNotes, setEditNotes] = useState('');
 
-  // Novo Serviço Detalhado
   const [selectedClientForService, setSelectedClientForService] = useState(null);
   const [serviceType, setServiceType] = useState('Corte de Cabelo');
   const [serviceDetails, setServiceDetails] = useState('');
@@ -111,7 +107,6 @@ export default function App() {
     setPassword('');
   };
 
-  // Cadastrar Amigo com Novos Campos
   const handleAddClient = async (e) => {
     e.preventDefault();
     if (!newName.trim()) return;
@@ -137,7 +132,6 @@ export default function App() {
     }
   };
 
-  // Iniciar Edição
   const startEditing = (client) => {
     setEditingId(client.id);
     setEditName(client.name);
@@ -147,7 +141,6 @@ export default function App() {
     setEditNotes(client.notes || '');
   };
 
-  // Salvar Edição
   const handleSaveEdit = async (id) => {
     try {
       const clientRef = doc(db, 'clients', id);
@@ -164,7 +157,6 @@ export default function App() {
     }
   };
 
-  // Registrar Serviço Detalhado
   const handleSaveService = async (e) => {
     e.preventDefault();
     if (!selectedClientForService) return;
@@ -308,7 +300,6 @@ export default function App() {
 
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-8 space-y-8">
         
-        {/* Formulário Completo de Cadastro */}
         <section className="bg-neutral-900 border border-neutral-800 rounded-xl p-6">
           <h2 className="text-sm font-semibold text-amber-500 flex items-center gap-2 mb-4">
             <UserPlus className="w-4 h-4" /> Cadastrar Novo Amigo / Cliente
@@ -349,7 +340,7 @@ export default function App() {
               />
               <input
                 type="text"
-                placeholder="Observações (ex: gosta de café sem açúcar, prefere degradê alto...)"
+                placeholder="Observações (ex: gosta de café sem açúcar...)"
                 value={newNotes}
                 onChange={(e) => setNewNotes(e.target.value)}
                 className="bg-neutral-950 border border-neutral-800 rounded-lg px-4 py-2 text-sm text-white focus:outline-none focus:border-amber-500"
@@ -365,7 +356,6 @@ export default function App() {
           </form>
         </section>
 
-        {/* Modal Registrar Serviço Detalhado */}
         {selectedClientForService && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
             <div className="bg-neutral-900 border border-amber-500/30 rounded-2xl p-6 max-w-md w-full space-y-4">
@@ -397,7 +387,7 @@ export default function App() {
                     rows={3}
                     value={serviceDetails}
                     onChange={(e) => setServiceDetails(e.target.value)}
-                    placeholder="Descreva exatamente o que foi feito (ex: Corte degradê navalhado, alinhamento de barba com toalha quente e pomada mate)"
+                    placeholder="Descreva exatamente o que foi feito..."
                     className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 resize-none"
                   />
                 </div>
@@ -434,7 +424,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Lista de Amigos */}
         <section className="space-y-4">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -464,7 +453,6 @@ export default function App() {
               {filteredClients.map((client) => (
                 <div key={client.id} className="bg-neutral-900 border border-neutral-800 rounded-xl p-5 flex flex-col justify-between space-y-4">
                   
-                  {/* Nome e Edição */}
                   <div>
                     {editingId === client.id ? (
                       <div className="space-y-2">
@@ -539,7 +527,6 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Dados Detalhados */}
                         <div className="mt-2 space-y-1 text-xs text-neutral-400">
                           <p className="flex items-center gap-1.5">
                             <Phone className="w-3.5 h-3.5 text-neutral-500" /> {client.phone}
@@ -564,7 +551,6 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Cartão de Pontos */}
                   <div className="bg-neutral-950 border border-neutral-800/80 rounded-lg p-3 space-y-2">
                     <div className="flex justify-between items-center text-xs">
                       <span className="text-neutral-400 flex items-center gap-1">
@@ -581,7 +567,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Histórico Detalhado */}
                   {client.servicesHistory && client.servicesHistory.length > 0 && (
                     <div className="bg-neutral-950/50 rounded-lg p-2.5 border border-neutral-800/40 text-xs space-y-2 max-h-32 overflow-y-auto">
                       <span className="text-neutral-400 font-semibold flex items-center gap-1 text-[11px]">
@@ -602,7 +587,6 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Botões de Ação */}
                   <div className="flex gap-2">
                     <button
                       onClick={() => setSelectedClientForService(client)}
